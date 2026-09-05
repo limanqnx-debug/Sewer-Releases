@@ -1,8 +1,6 @@
-Sewer Python DEV2 FULL
+Sewer v1.0.5 — Python DEV2 FULL hotfix
 
-- Full Python port of the Sewer production workflow
-- OWON power supply control and current protection
-- Programmer workflow, Start / Repeat / Stop and hotkeys
-- Settings, logs, external program and pulse logic
-- Rigol RSA5065N control with Trace Live
-- Scale/Div: integer values with 1 dB/div step
+- Fixed startup crash in PySide6 GUI
+- QTimer moved from QtWidgets.QTimer to QtCore.QTimer
+- No functional changes to OWON, Programmer or Rigol control
+- Scale/Div integer 1 dB/div behavior preserved
