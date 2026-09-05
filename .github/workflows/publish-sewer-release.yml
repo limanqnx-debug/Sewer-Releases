@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - Sewer-Windows.zip
+      - VERSION.txt
   workflow_dispatch:
 
 permissions:
@@ -33,17 +33,31 @@ jobs:
           esac
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Rebuild update package
+        shell: bash
+        run: |
+          cat .release_parts/part-* > Sewer-Windows.zip.b64
+          base64 --decode Sewer-Windows.zip.b64 > Sewer-Windows.zip
+          test -s Sewer-Windows.zip
+          unzip -t Sewer-Windows.zip
+          sha256sum Sewer-Windows.zip
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
+          NOTES="Sewer update $VERSION"
+          if [ -f RELEASE_NOTES.txt ]; then
+            NOTES="$(cat RELEASE_NOTES.txt)"
+          fi
           if gh release view "$VERSION" >/dev/null 2>&1; then
             gh release upload "$VERSION" Sewer-Windows.zip --clobber
+            gh release edit "$VERSION" --title "Sewer $VERSION" --notes "$NOTES"
           else
             gh release create "$VERSION" Sewer-Windows.zip \
               --target main \
               --title "Sewer $VERSION" \
-              --notes "Scale/Div: integer values with 1 dB/div step."
+              --notes "$NOTES"
           fi
