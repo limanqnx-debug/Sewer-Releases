@@ -1,6 +1,9 @@
-Sewer v1.0.5 — Python DEV2 FULL hotfix
+Sewer-P v1.0.6 — настройки
 
-- Fixed startup crash in PySide6 GUI
-- QTimer moved from QtWidgets.QTimer to QtCore.QTimer
-- No functional changes to OWON, Programmer or Rigol control
-- Scale/Div integer 1 dB/div behavior preserved
+- Убраны стрелки числовых полей, сохранена прокрутка колесом.
+- Стандартный список скоростей COM.
+- «Нет платы»: три знака после запятой.
+- Кнопки выбора Programmer и прошивки.
+- Вкладка Rigol и выбор USB / ETH с сохранением адресов.
+
+Проверена установка кодом Sewer Launcher v0.3.0: распаковка, версия, сохранение config.json и резервная копия. Проверка интерфейса и приборов на Windows предстоит.
