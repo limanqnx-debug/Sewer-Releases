@@ -1,63 +1,124 @@
-name: Publish Sewer Release
+name: Build and Publish Sewer Release
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - VERSION.txt
+      - .release_parts/**
+      - .github/workflows/publish-sewer-release.yml
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: sewer-windows-release
+  cancel-in-progress: false
+
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_SCALE_FACTOR: '1'
+      QT_FONT_DPI: '96'
+      PYTHONUTF8: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read version
-        id: version
-        shell: bash
-        run: |
-          VERSION="$(tr -d '\r\n ' < VERSION.txt)"
-          if [ -z "$VERSION" ]; then
-            echo "VERSION.txt is empty"
-            exit 1
-          fi
-          case "$VERSION" in
-            v*) ;;
-            *) VERSION="v$VERSION" ;;
-          esac
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Set up Python x64 for the build
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
 
-      - name: Rebuild update package
-        shell: bash
+      - name: Restore and validate the source package
+        shell: python
         run: |
-          cat .release_parts/part-* > Sewer-Windows.zip.b64
-          base64 --decode Sewer-Windows.zip.b64 > Sewer-Windows.zip
-          test -s Sewer-Windows.zip
-          unzip -t Sewer-Windows.zip
-          sha256sum Sewer-Windows.zip
+          import base64, hashlib, os
+          from pathlib import Path
+          from zipfile import ZipFile
+          version = Path('VERSION.txt').read_text().strip()
+          assert version.startswith('v') and all(x.isdigit() for x in version[1:].split('.'))
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write('SEWER_VERSION=' + version + '\n')
+          encoded = ''.join(p.read_text() for p in sorted(Path('.release_parts').glob('part-*')))
+          payload = base64.b64decode(encoded, validate=True)
+          assert Path('Sewer-Windows.zip').read_bytes() == payload
+          with ZipFile('Sewer-Windows.zip') as archive:
+              assert archive.testzip() is None
+              for name in archive.namelist():
+                  assert not Path(name).is_absolute() and '..' not in Path(name).parts
+              archive.extractall('source')
+          root = Path('source/Sewer_Python_DEV2_FULL')
+          assert (root / 'version.txt').read_text().strip() == version
+          print('Source SHA256:', hashlib.sha256(payload).hexdigest())
 
-      - name: Publish GitHub Release
+      - name: Install build dependencies
+        working-directory: source/Sewer_Python_DEV2_FULL
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Test source on Windows
+        working-directory: source/Sewer_Python_DEV2_FULL
+        run: python -m unittest discover -s tests -v
+
+      - name: Build standalone Sewer.exe
+        working-directory: source/Sewer_Python_DEV2_FULL
+        run: python build_windows.py
+
+      - name: Launch the EXE twice without Python on PATH
+        working-directory: source/Sewer_Python_DEV2_FULL
+        run: python verify_windows.py
+
+      - name: Assemble portable package and checksums
+        shell: python
+        run: |
+          import hashlib, json, os
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          root = Path('source/Sewer_Python_DEV2_FULL')
+          version = os.environ['SEWER_VERSION']
+          package = Path('Sewer-P-Windows-x64-' + version + '.zip')
+          report = json.loads((root / 'dist/smoke/summary.json').read_text())
+          assert report['ok']
+          assert json.loads((root / 'dist/smoke/launch-2.json').read_text(encoding='utf-8'))['version'] == version
+          with ZipFile(package, 'w', ZIP_DEFLATED, compresslevel=9) as archive:
+              archive.write(root / 'dist/Sewer.exe', 'Sewer-P/Sewer.exe')
+              archive.write(root / 'README-EXE.txt', 'Sewer-P/README.txt')
+          with ZipFile(package) as archive:
+              assert archive.testzip() is None
+          files = [Path('Sewer-Windows.zip'), package]
+          sums = ''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in files)
+          Path('SHA256SUMS.txt').write_text(sums, encoding='utf-8')
+          print(sums)
+
+      - name: Preserve build checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sewer-Windows-build-checks
+          path: |
+            source/Sewer_Python_DEV2_FULL/dist/smoke/**
+            source/Sewer_Python_DEV2_FULL/build/Sewer/warn-Sewer.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish verified release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        shell: bash
+        shell: pwsh
         run: |
-          NOTES="Sewer update $VERSION"
-          if [ -f RELEASE_NOTES.txt ]; then
-            NOTES="$(cat RELEASE_NOTES.txt)"
-          fi
-          if gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release upload "$VERSION" Sewer-Windows.zip --clobber
-            gh release edit "$VERSION" --title "Sewer $VERSION" --notes "$NOTES"
-          else
-            gh release create "$VERSION" Sewer-Windows.zip \
-              --target main \
-              --title "Sewer $VERSION" \
-              --notes "$NOTES"
-          fi
+          $version = $env:SEWER_VERSION
+          $portable = "Sewer-P-Windows-x64-$version.zip"
+          gh release view $version *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $version Sewer-Windows.zip $portable SHA256SUMS.txt --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
+            gh release edit $version --title "Sewer-P $version" --notes-file RELEASE_NOTES.txt
+          } else {
+            gh release create $version Sewer-Windows.zip $portable SHA256SUMS.txt --target $env:GITHUB_SHA --title "Sewer-P $version" --notes-file RELEASE_NOTES.txt
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
