@@ -73,7 +73,7 @@ jobs:
         working-directory: source/Sewer_Python_DEV2_FULL
         run: python verify_windows.py
 
-      - name: Assemble portable package and checksums
+      - name: Assemble portable and launcher packages and checksums
         shell: python
         run: |
           import hashlib, json, os
@@ -90,7 +90,17 @@ jobs:
               archive.write(root / 'README-EXE.txt', 'Sewer-P/README.txt')
           with ZipFile(package) as archive:
               assert archive.testzip() is None
-          files = [Path('Sewer-Windows.zip'), package]
+          source_package = Path('Sewer-P-Source-' + version + '.zip')
+          Path('Sewer-Windows.zip').rename(source_package)
+          with ZipFile(source_package) as source, ZipFile('Sewer-Windows.zip', 'w', ZIP_DEFLATED, compresslevel=9) as launcher:
+              for item in source.infolist():
+                  launcher.writestr(item, source.read(item))
+              launcher.write(root / 'dist/Sewer.exe', 'Sewer_Python_DEV2_FULL/Sewer.exe')
+          with ZipFile('Sewer-Windows.zip') as archive:
+              assert archive.testzip() is None
+              assert hashlib.sha256(archive.read('Sewer_Python_DEV2_FULL/Sewer.exe')).hexdigest() == report['exe_sha256']
+              assert archive.read('Sewer_Python_DEV2_FULL/version.txt').decode().strip() == version
+          files = [Path('Sewer-Windows.zip'), package, source_package]
           sums = ''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in files)
           Path('SHA256SUMS.txt').write_text(sums, encoding='utf-8')
           print(sums)
@@ -113,12 +123,13 @@ jobs:
         run: |
           $version = $env:SEWER_VERSION
           $portable = "Sewer-P-Windows-x64-$version.zip"
+          $source = "Sewer-P-Source-$version.zip"
           gh release view $version *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $version Sewer-Windows.zip $portable SHA256SUMS.txt --clobber
+            gh release upload $version Sewer-Windows.zip $portable $source SHA256SUMS.txt --clobber
             if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
             gh release edit $version --title "Sewer-P $version" --notes-file RELEASE_NOTES.txt
           } else {
-            gh release create $version Sewer-Windows.zip $portable SHA256SUMS.txt --target $env:GITHUB_SHA --title "Sewer-P $version" --notes-file RELEASE_NOTES.txt
+            gh release create $version Sewer-Windows.zip $portable $source SHA256SUMS.txt --target $env:GITHUB_SHA --title "Sewer-P $version" --notes-file RELEASE_NOTES.txt
           }
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
