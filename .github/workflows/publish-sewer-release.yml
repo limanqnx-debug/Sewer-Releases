@@ -14,7 +14,8 @@ permissions:
 
 concurrency:
   group: sewer-windows-release
-  cancel-in-progress: false
+  # A corrective push can stop an earlier run that stalled before publication.
+  cancel-in-progress: ${{ startsWith(github.event.head_commit.message, 'Restart stalled ') }}
 
 jobs:
   release:
@@ -62,6 +63,7 @@ jobs:
         run: python -m pip install -r requirements-build.txt
 
       - name: Test source on Windows
+        timeout-minutes: 4
         working-directory: source/Sewer_Python_DEV2_FULL
         run: python -m unittest discover -s tests -v
 
